@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
 import '../services/tmdb_api.dart';
 import '../models/movie.dart';
@@ -13,9 +14,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<Movie> allMovies = []; 
+  List<Movie> allMovies = [];
   List<Movie> filteredMovies = [];
   List<Movie> suggestedMovies = [];
+  List<int> watchedMovieIds = []; // ✅ Store watched movie IDs
   bool _isLoading = true;
   bool _isLoadingMore = false;
   int currentPage = 1;
@@ -25,10 +27,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    fetchMovies();
+    loadWatchedMovies(); // ✅ Load watched movies before fetching new movies
     _scrollController.addListener(_loadMoreMovies);
   }
 
+  /// ✅ **Load Watched Movies from SharedPreferences**
+  Future<void> loadWatchedMovies() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String> watchedMovies = prefs.getStringList(Constants.watchedKey) ?? [];
+    setState(() {
+      watchedMovieIds = watchedMovies.map((id) => int.tryParse(id) ?? 0).toList();
+    });
+    fetchMovies();
+  }
+
+  /// ✅ **Fetch Movies & Remove Watched Movies from Recommendations**
   Future<void> fetchMovies({bool loadMore = false}) async {
     if (_isLoadingMore) return; // ✅ Prevent multiple calls
 
@@ -45,14 +58,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         if (loadMore) {
-          allMovies.addAll(newMovies.where((m) => !allMovies.contains(m))); // ✅ Prevent duplicates
-          filteredMovies = List.from(allMovies); // ✅ Update filtered movies
-          suggestedMovies.addAll(newSuggestions.where((m) => !suggestedMovies.contains(m))); // ✅ Update suggestions dynamically
-          currentPage++; // ✅ Increment page after loading
+          allMovies.addAll(newMovies.where((m) => !allMovies.contains(m))); 
+          filteredMovies = List.from(allMovies);
+          suggestedMovies.addAll(newSuggestions.where((m) => !suggestedMovies.contains(m))); 
+          currentPage++; 
         } else {
           allMovies = newMovies;
           filteredMovies = List.from(newMovies);
-          suggestedMovies = newSuggestions.take(5).toList();
+          suggestedMovies = newSuggestions.where((movie) => !watchedMovieIds.contains(movie.id)).take(5).toList(); // ✅ Remove watched movies
         }
         _isLoading = false;
         _isLoadingMore = false;
@@ -76,12 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       selectedGenre = genre;
       if (genre == "All") {
-        filteredMovies = List.from(allMovies);
+        filteredMovies = allMovies.where((movie) => !watchedMovieIds.contains(movie.id)).toList(); // ✅ Remove watched movies from filtered list
         return;
       }
       int? genreId = Constants.genreMap[genre];
       if (genreId == null) return;
-      filteredMovies = allMovies.where((movie) => movie.genreIds.contains(genreId)).toList();
+      filteredMovies = allMovies.where((movie) => movie.genreIds.contains(genreId) && !watchedMovieIds.contains(movie.id)).toList(); // ✅ Remove watched movies
     });
   }
 
