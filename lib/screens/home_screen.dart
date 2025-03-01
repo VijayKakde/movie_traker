@@ -1,128 +1,184 @@
 import 'package:flutter/material.dart';
 import '../utils/constants.dart';
-import '../utils/theme.dart';
+import '../services/tmdb_api.dart';
+import '../models/movie.dart';
 import 'movie_detail_screen.dart';
 import 'search_screen.dart';
 import 'watchlist_screen.dart';
-import 'profile_screen.dart'; // ✅ Import Profile Screen
-import '../services/tmdb_api.dart';
-import '../models/movie.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
   _HomeScreenState createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _HomeScreenState extends State<HomeScreen> {
+  List<Movie> allMovies = []; 
+  List<Movie> filteredMovies = [];
+  List<Movie> suggestedMovies = [];
   bool _isLoading = true;
-  List<Movie> popularMovies = [];
-  List<Movie> nowPlayingMovies = [];
-  List<Movie> upcomingMovies = [];
-  List<Movie> topRatedMovies = [];
+  bool _isLoadingMore = false;
+  int currentPage = 1;
+  String selectedGenre = "All";
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
     fetchMovies();
+    _scrollController.addListener(_loadMoreMovies);
   }
 
-  Future<void> fetchMovies() async {
+  Future<void> fetchMovies({bool loadMore = false}) async {
+    if (_isLoadingMore) return; // ✅ Prevent multiple calls
+
+    if (loadMore) {
+      setState(() => _isLoadingMore = true);
+    } else {
+      setState(() => _isLoading = true);
+    }
+
     final tmdbApi = TmdbApi();
     try {
-      final popMovies = await tmdbApi.getPopularMovies();
-      final nowPlaying = await tmdbApi.getNowPlayingMovies();
-      final upcoming = await tmdbApi.getUpcomingMovies();
-      final topRated = await tmdbApi.getTopRatedMovies();
+      final newMovies = await tmdbApi.getPopularMovies(page: currentPage);
+      final newSuggestions = await tmdbApi.getTrendingMovies(page: currentPage);
 
       setState(() {
-        popularMovies = popMovies;
-        nowPlayingMovies = nowPlaying;
-        upcomingMovies = upcoming;
-        topRatedMovies = topRated;
+        if (loadMore) {
+          allMovies.addAll(newMovies.where((m) => !allMovies.contains(m))); // ✅ Prevent duplicates
+          filteredMovies = List.from(allMovies); // ✅ Update filtered movies
+          suggestedMovies.addAll(newSuggestions.where((m) => !suggestedMovies.contains(m))); // ✅ Update suggestions dynamically
+          currentPage++; // ✅ Increment page after loading
+        } else {
+          allMovies = newMovies;
+          filteredMovies = List.from(newMovies);
+          suggestedMovies = newSuggestions.take(5).toList();
+        }
         _isLoading = false;
+        _isLoadingMore = false;
       });
     } catch (e) {
-      setState(() => _isLoading = false);
+      print("⚠️ Error fetching movies: $e");
+      setState(() {
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
     }
+  }
+
+  void _loadMoreMovies() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 100) {
+      fetchMovies(loadMore: true);
+    }
+  }
+
+  void filterMovies(String genre) {
+    setState(() {
+      selectedGenre = genre;
+      if (genre == "All") {
+        filteredMovies = List.from(allMovies);
+        return;
+      }
+      int? genreId = Constants.genreMap[genre];
+      if (genreId == null) return;
+      filteredMovies = allMovies.where((movie) => movie.genreIds.contains(genreId)).toList();
+    });
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) {
-          return [
-            SliverAppBar(
-              expandedHeight: 200,
-              floating: false,
-              pinned: true,
-              flexibleSpace: FlexibleSpaceBar(
-                title: Text(Constants.appName, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22)),
-                background: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [AppTheme.primaryColor, AppTheme.primaryColor.withOpacity(0.7)],
-                    ),
-                  ),
-                  child: Center(child: Icon(Icons.movie_outlined, size: 80, color: Colors.white.withOpacity(0.8))),
-                ),
-              ),
-              actions: [
-                IconButton(
-                  icon: Icon(Icons.search),
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => SearchScreen())),
-                ),
-                IconButton(
-                  icon: Icon(Icons.bookmark),
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => WatchlistScreen())),
-                ),
-                IconButton( // ✅ Add Profile Icon Button
-                  icon: Icon(Icons.person), 
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ProfileScreen())),
-                ),
-              ],
-              bottom: TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                indicatorColor: Colors.white,
-                indicatorWeight: 3,
-                tabs: [
-                  Tab(text: "Popular"),
-                  Tab(text: "Now Playing"),
-                  Tab(text: "Upcoming"),
-                  Tab(text: "Top Rated"),
-                ],
-              ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildTopBar(),
+            _buildFilterDropdown(),
+            _buildSuggestedMovies(),
+            Expanded(
+              child: _isLoading
+                  ? Center(child: CircularProgressIndicator())
+                  : _buildMovieGrid(filteredMovies),
             ),
-          ];
-        },
-        body: _isLoading
-            ? Center(child: CircularProgressIndicator())
-            : TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildMovieGrid(popularMovies),
-                  _buildMovieGrid(nowPlayingMovies),
-                  _buildMovieGrid(upcomingMovies),
-                  _buildMovieGrid(topRatedMovies),
-                ],
-              ),
+            if (_isLoadingMore) Padding(padding: EdgeInsets.all(8), child: CircularProgressIndicator()),
+          ],
+        ),
       ),
     );
   }
 
+  Widget _buildTopBar() {
+    return Padding(
+      padding: EdgeInsets.all(12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(Constants.appName, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          Row(
+            children: [
+              IconButton(icon: Icon(Icons.search), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => SearchScreen()))),
+              IconButton(icon: Icon(Icons.bookmark), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => WatchlistScreen()))),
+              IconButton(icon: Icon(Icons.person), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ProfileScreen()))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterDropdown() {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Text("Filter by Genre:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          SizedBox(width: 10),
+          DropdownButton<String>(
+            value: selectedGenre,
+            onChanged: (value) => filterMovies(value!),
+            items: Constants.genreMap.keys
+                .map((genre) => DropdownMenuItem(value: genre, child: Text(genre)))
+                .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSuggestedMovies() {
+    return suggestedMovies.isEmpty
+        ? SizedBox.shrink()
+        : Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("🔥 Suggested for You", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(height: 8),
+                Container(
+                  height: 200,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: suggestedMovies.length,
+                    itemBuilder: (context, index) {
+                      final movie = suggestedMovies[index];
+                      return _buildMovieCard(movie);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+  }
+
   Widget _buildMovieGrid(List<Movie> movies) {
     return GridView.builder(
+      controller: _scrollController,
       padding: EdgeInsets.all(16),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
@@ -137,76 +193,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildMovieCard(Movie movie) {
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => MovieDetailScreen(movie: movie)),
-      ),
-      child: Hero(
-        tag: 'movie-${movie.id}',
-        child: Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              ClipRRect(
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MovieDetailScreen(movie: movie))),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: movie.posterPath != null
-                    ? Image.network(
-                        '${Constants.imageBaseUrl}${movie.posterPath}',
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            color: Colors.grey[300],
-                            child: Center(child: Icon(Icons.image_not_supported, size: 50)),
-                          );
-                        },
-                      )
-                    : Container(
-                        color: Colors.grey[300],
-                        child: Center(child: Icon(Icons.image_not_supported, size: 50)),
-                      ),
+                child: Image.network('${Constants.imageBaseUrl}${movie.posterPath}', fit: BoxFit.cover),
               ),
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.only(
-                      bottomLeft: Radius.circular(12),
-                      bottomRight: Radius.circular(12),
-                    ),
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: [Colors.black.withOpacity(0.8), Colors.transparent],
-                    ),
-                  ),
-                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        movie.title,
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(Icons.star, color: Colors.amber, size: 16),
-                          SizedBox(width: 4),
-                          Text(movie.voteAverage.toStringAsFixed(1), style: TextStyle(color: Colors.white, fontSize: 12)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(8),
+              child: Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
         ),
       ),
     );
